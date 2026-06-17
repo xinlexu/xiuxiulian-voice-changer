@@ -529,7 +529,7 @@ export async function openVirtualAudioInstallerPage() {
   return {
     ...status,
     opened: process.platform === "win32",
-    note: "下载 Windows 包后，解压并以管理员身份运行 VBCABLE_Setup_x64.exe，安装完成后重启本应用。",
+    note: "按安装流程完成虚拟声卡驱动后，重新打开本应用。",
   };
 }
 

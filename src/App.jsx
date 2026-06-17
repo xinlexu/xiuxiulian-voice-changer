@@ -651,7 +651,7 @@ export default function App() {
               <Cable size={16} />
               {virtualAudio.installed
                 ? `已检测到虚拟声卡${virtualAudioName ? `：${virtualAudioName}` : ""}`
-                : "未检测到虚拟声卡；游戏/Discord 通常需要 VB-Cable。"}
+                : "未安装虚拟声卡驱动；请先完成 setup-windows.bat 安装流程。"}
             </span>
             {!virtualAudio.installed && (
               <button
@@ -659,7 +659,7 @@ export default function App() {
                 disabled={Boolean(busy)}
                 onClick={() => runAction("virtual-audio", openVirtualAudioInstaller, "已打开 VB-Audio 官方安装页")}
               >
-                安装虚拟声卡
+                安装声卡
               </button>
             )}
           </div>

@@ -1,18 +1,24 @@
 param(
   [string]$VoiceChangerZipUrl = $env:XIUXIULIAN_BACKEND_ZIP_URL,
-  [switch]$OpenDriverDownload,
   [switch]$StartApp
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
 
-function Write-Step($Message) {
+function Write-Step {
+  param(
+    [int]$Number,
+    [string]$Message
+  )
+
   Write-Host ""
-  Write-Host "== $Message =="
+  Write-Host "[$Number/3] $Message"
 }
 
 function Test-Command($Name) {
@@ -27,7 +33,6 @@ function Add-NodeToCurrentPath {
 }
 
 function Ensure-Node {
-  Write-Step "Checking Node.js"
   Add-NodeToCurrentPath
 
   if ((Test-Command "node") -and (Test-Command "npm")) {
@@ -36,7 +41,7 @@ function Ensure-Node {
   }
 
   if (Test-Command "winget") {
-    Write-Host "Node.js was not found. Installing Node.js LTS with winget..."
+    Write-Host "Installing Node.js LTS..."
     winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
     Add-NodeToCurrentPath
   }
@@ -47,18 +52,17 @@ function Ensure-Node {
   }
 
   Start-Process $nodeUrl
-  throw "Node.js is still missing. Install the LTS version, reopen this script, and try again."
+  throw "Node.js installation is not complete. Install Node.js LTS, then run setup-windows.bat again."
 }
 
 function Ensure-NpmDependencies {
-  Write-Step "Checking app dependencies"
   Push-Location $projectRoot
   try {
     if (!(Test-Path (Join-Path $projectRoot "node_modules"))) {
-      Write-Host "Installing npm dependencies..."
+      Write-Host "Installing app dependencies..."
       npm install
     } else {
-      Write-Host "node_modules already exists."
+      Write-Host "App dependencies are installed."
     }
   } finally {
     Pop-Location
@@ -84,10 +88,9 @@ function Get-SavedVoiceRoot {
 }
 
 function Get-VoiceRootCandidates {
-  $savedRoot = Get-SavedVoiceRoot
   $items = @(
     $env:VOICE_ROOT,
-    $savedRoot,
+    (Get-SavedVoiceRoot),
     (Join-Path $projectRoot "VoiceChanger"),
     (Join-Path (Split-Path $projectRoot -Parent) "VoiceChanger"),
     "D:\VoiceChanger",
@@ -126,7 +129,7 @@ function Save-VoiceRoot($Root) {
 function Expand-VoiceChangerZip($ZipPath) {
   $zipFullPath = [System.IO.Path]::GetFullPath($ZipPath)
   if (!(Test-Path $zipFullPath)) {
-    throw "Backend zip was not found: $zipFullPath"
+    throw "Backend package was not found: $zipFullPath"
   }
 
   $targetRoot = Join-Path $projectRoot "VoiceChanger"
@@ -137,7 +140,7 @@ function Expand-VoiceChangerZip($ZipPath) {
   $tempRoot = Join-Path $env:TEMP ("xiuxiulian-backend-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
-  Write-Host "Extracting backend zip..."
+  Write-Host "Extracting backend package..."
   Expand-Archive -Path $zipFullPath -DestinationPath $tempRoot -Force
 
   $sourceRoot = ""
@@ -155,7 +158,7 @@ function Expand-VoiceChangerZip($ZipPath) {
   }
 
   if (!$sourceRoot) {
-    throw "The zip does not contain a usable VoiceChanger folder with runtime\python.exe and rvc_core."
+    throw "VoiceChanger.zip does not contain runtime\python.exe and rvc_core."
   }
 
   Copy-Item -Path $sourceRoot -Destination $targetRoot -Recurse
@@ -163,11 +166,12 @@ function Expand-VoiceChangerZip($ZipPath) {
 }
 
 function Ensure-VoiceChangerBackend {
-  Write-Step "Checking VoiceChanger backend"
+  Write-Step 1 "下载路径"
+  Write-Host "Install folder: $projectRoot"
 
   $existingRoot = Find-VoiceRoot
   if ($existingRoot) {
-    Write-Host "VoiceChanger backend is ready: $existingRoot"
+    Write-Host "Backend folder: $existingRoot"
     Save-VoiceRoot $existingRoot
     return $existingRoot
   }
@@ -180,6 +184,7 @@ function Ensure-VoiceChangerBackend {
 
   foreach ($zip in $localZips) {
     if (Test-Path $zip) {
+      Write-Host "Backend package: $zip"
       $root = Expand-VoiceChangerZip $zip
       Save-VoiceRoot $root
       return $root
@@ -187,45 +192,43 @@ function Ensure-VoiceChangerBackend {
   }
 
   if ($VoiceChangerZipUrl) {
-    $downloadPath = Join-Path $env:TEMP "VoiceChanger.zip"
-    Write-Host "Downloading backend package..."
+    $downloadPath = Join-Path $projectRoot "VoiceChanger.zip"
+    Write-Host "Downloading backend package to: $downloadPath"
     Invoke-WebRequest -Uri $VoiceChangerZipUrl -OutFile $downloadPath
     $root = Expand-VoiceChangerZip $downloadPath
     Save-VoiceRoot $root
     return $root
   }
 
-  Write-Host "VoiceChanger backend was not found."
-  Write-Host ""
-  Write-Host "Put one of these next to this app, then run setup-windows.bat again:"
-  Write-Host "  1. A VoiceChanger folder containing runtime\python.exe and rvc_core"
-  Write-Host "  2. A VoiceChanger.zip release package"
-  Write-Host ""
-  Write-Host "If you publish a backend zip in GitHub Releases, you can run:"
-  Write-Host "  powershell -ExecutionPolicy Bypass -File tools\setup-from-zero.ps1 -VoiceChangerZipUrl <zip-url> -StartApp"
+  Write-Host "Missing backend package."
+  Write-Host "Put VoiceChanger.zip in this folder, then run setup-windows.bat again:"
+  Write-Host "  $projectRoot"
   return ""
 }
 
 function Ensure-VirtualAudio {
-  Write-Step "Checking virtual audio driver"
+  param([string]$VoiceRoot)
+
+  Write-Step 2 "安装声卡驱动"
   $script = Join-Path $PSScriptRoot "setup-virtual-audio.ps1"
-
-  if ($OpenDriverDownload) {
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -OpenDownloadPage
-  } else {
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+  $searchRoots = @($projectRoot, (Join-Path $projectRoot "VoiceChanger"))
+  if ($VoiceRoot) {
+    $searchRoots += $VoiceRoot
   }
 
-  if ($LASTEXITCODE -eq 0) {
-    return
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -SearchRoots $searchRoots -OpenDownloadPage -Required
+  if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
   }
+}
 
-  Write-Host ""
-  Write-Host "Virtual audio is not installed yet. You can still open the app, but games and voice chat usually need VB-CABLE."
+function Ensure-AppInstalled {
+  Write-Step 3 "软件安装"
+  Ensure-Node
+  Ensure-NpmDependencies
 }
 
 function Start-App {
-  Write-Step "Starting app"
   Push-Location $projectRoot
   try {
     Start-Process "http://127.0.0.1:5174/"
@@ -235,16 +238,13 @@ function Start-App {
   }
 }
 
-Ensure-Node
-Ensure-NpmDependencies
 $voiceRoot = Ensure-VoiceChangerBackend
-Ensure-VirtualAudio
-
 if (!$voiceRoot) {
-  Write-Host ""
-  Write-Host "Setup is incomplete because the VoiceChanger backend is missing."
   exit 2
 }
+
+Ensure-VirtualAudio -VoiceRoot $voiceRoot
+Ensure-AppInstalled
 
 Write-Host ""
 Write-Host "Setup completed."
