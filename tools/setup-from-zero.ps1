@@ -12,9 +12,12 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
-$setupVersion = "2026-06-17-accelerated-download"
+$setupVersion = "2026-06-17-cn-mirror-parallel"
 $defaultBackendReleaseTag = $(if ($env:XIUXIULIAN_BACKEND_RELEASE_TAG) { $env:XIUXIULIAN_BACKEND_RELEASE_TAG } else { "backend-v2" })
 $defaultBackendPartCount = $(if ($env:XIUXIULIAN_BACKEND_PART_COUNT) { [int]$env:XIUXIULIAN_BACKEND_PART_COUNT } else { 22 })
+$parallelBackendDownloads = $(if ($env:XIUXIULIAN_PARALLEL_DOWNLOADS) { [int]$env:XIUXIULIAN_PARALLEL_DOWNLOADS } else { 4 })
+$defaultBackendZipBytes = 5639712431
+$defaultBackendZipSha256 = "C9B852A53FE3A55D3173C248F839C81BCF37645C399D23B81DC5872849D596ED"
 $script:curlSupportsRetryAllErrors = $null
 $script:aria2Command = $null
 
@@ -76,22 +79,6 @@ function Get-Aria2Command {
 }
 
 function Ensure-Aria2 {
-  $aria2 = Get-Aria2Command
-  if ($aria2) {
-    return $aria2
-  }
-
-  if (!(Test-Command "winget")) {
-    return ""
-  }
-
-  Write-Host "Installing download accelerator..."
-  winget install --id aria2.aria2 -e --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "Download accelerator install failed; using built-in downloader."
-    return ""
-  }
-
   return Get-Aria2Command
 }
 
@@ -114,6 +101,60 @@ function Get-DefaultBackendPartUrls {
   for ($i = 1; $i -le $defaultBackendPartCount; $i++) {
     $partName = "VoiceChanger.zip.{0:D3}" -f $i
     "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/$defaultBackendReleaseTag/$partName"
+  }
+}
+
+function Get-DownloadMirrors {
+  if ($env:XIUXIULIAN_DOWNLOAD_MIRRORS) {
+    return @(
+      $env:XIUXIULIAN_DOWNLOAD_MIRRORS -split "[;`r`n]+" |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -or $_ -eq "direct" }
+    )
+  }
+
+  return @(
+    "https://gh-proxy.com/",
+    "https://ghproxy.net/",
+    "direct"
+  )
+}
+
+function Get-DownloadUrls($Url) {
+  if ($Url -notlike "https://github.com/*") {
+    return @($Url)
+  }
+
+  $seen = @{}
+  $urls = @()
+  foreach ($mirror in Get-DownloadMirrors) {
+    if (!$mirror -or $mirror -eq "direct") {
+      $candidate = $Url
+    } elseif ($mirror -like "*{0}*") {
+      $candidate = [string]::Format($mirror, $Url)
+    } else {
+      $candidate = "$mirror$Url"
+    }
+
+    $key = $candidate.ToLowerInvariant()
+    if (!$seen.ContainsKey($key)) {
+      $seen[$key] = $true
+      $urls += $candidate
+    }
+  }
+
+  return $urls
+}
+
+function Get-DownloadSourceLabel($Url) {
+  try {
+    $uri = [Uri]$Url
+    if ($uri.Host -eq "github.com") {
+      return "github"
+    }
+    return $uri.Host
+  } catch {
+    return "source"
   }
 }
 
@@ -140,36 +181,83 @@ function Invoke-Aria2Download($Url, $OutputPath, $TempPath) {
   $tempName = Split-Path $TempPath -Leaf
   Write-Host "Using accelerated download: aria2c"
 
-  & $aria2 `
-    "--continue=true" `
-    "--max-connection-per-server=8" `
-    "--split=8" `
-    "--min-split-size=4M" `
-    "--max-tries=20" `
-    "--retry-wait=5" `
-    "--connect-timeout=30" `
-    "--timeout=60" `
-    "--lowest-speed-limit=1K" `
-    "--file-allocation=none" `
-    "--allow-overwrite=true" `
-    "--auto-file-renaming=false" `
-    "--summary-interval=10" `
-    "--console-log-level=warn" `
-    "--dir=$targetDir" `
-    "--out=$tempName" `
-    $Url
+  foreach ($candidateUrl in Get-DownloadUrls $Url) {
+    Write-Host "Download source: $(Get-DownloadSourceLabel $candidateUrl)"
+    & $aria2 `
+      "--continue=true" `
+      "--max-connection-per-server=8" `
+      "--split=8" `
+      "--min-split-size=4M" `
+      "--max-tries=20" `
+      "--retry-wait=5" `
+      "--connect-timeout=30" `
+      "--timeout=60" `
+      "--lowest-speed-limit=1K" `
+      "--file-allocation=none" `
+      "--allow-overwrite=true" `
+      "--auto-file-renaming=false" `
+      "--summary-interval=10" `
+      "--console-log-level=warn" `
+      "--dir=$targetDir" `
+      "--out=$tempName" `
+      $candidateUrl
 
-  if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $TempPath)) {
-    Move-Item -LiteralPath $TempPath -Destination $OutputPath -Force
-    $controlPath = "$TempPath.aria2"
-    if (Test-Path -LiteralPath $controlPath) {
-      Remove-Item -LiteralPath $controlPath -Force
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $TempPath)) {
+      Move-Item -LiteralPath $TempPath -Destination $OutputPath -Force
+      $controlPath = "$TempPath.aria2"
+      if (Test-Path -LiteralPath $controlPath) {
+        Remove-Item -LiteralPath $controlPath -Force
+      }
+      return $true
     }
-    return $true
   }
 
   Write-Host "Accelerated download did not complete; using built-in downloader."
   return $false
+}
+
+function New-CurlArgumentList($Url, $TempPath, $ResumeBytes) {
+  $curlArgs = @(
+    "-L",
+    "--fail",
+    "--silent",
+    "--show-error",
+    "--connect-timeout", "30",
+    "--retry", "8",
+    "--retry-delay", "5",
+    "--speed-time", "60",
+    "--speed-limit", "1024"
+  )
+
+  if (Test-CurlRetryAllErrors) {
+    $curlArgs += "--retry-all-errors"
+  }
+
+  if ($ResumeBytes -gt 0) {
+    $curlArgs += @("-C", "-")
+  }
+
+  return $curlArgs + @("-o", $TempPath, $Url)
+}
+
+function Invoke-CurlDownload($Url, $OutputPath, $TempPath) {
+  $resumeBytes = 0
+  if (Test-Path -LiteralPath $TempPath) {
+    $resumeBytes = (Get-Item -LiteralPath $TempPath).Length
+  }
+
+  $lastExitCode = 1
+  foreach ($candidateUrl in Get-DownloadUrls $Url) {
+    Write-Host "Download source: $(Get-DownloadSourceLabel $candidateUrl)"
+    $curlArgs = New-CurlArgumentList $candidateUrl $TempPath $resumeBytes
+    & curl.exe @curlArgs
+    $lastExitCode = $LASTEXITCODE
+    if ($lastExitCode -eq 0) {
+      return 0
+    }
+  }
+
+  return $lastExitCode
 }
 
 function Invoke-SetupDownload($Url, $OutputPath) {
@@ -208,27 +296,7 @@ function Invoke-SetupDownload($Url, $OutputPath) {
     Write-Host "Downloading: $(Split-Path $target -Leaf) (try $attempt/$maxAttempts$resumeText)"
 
     if (Test-Command "curl.exe") {
-      $curlArgs = @(
-        "-L",
-        "--fail",
-        "--connect-timeout", "30",
-        "--retry", "3",
-        "--retry-delay", "5",
-        "--speed-time", "60",
-        "--speed-limit", "1024"
-      )
-
-      if (Test-CurlRetryAllErrors) {
-        $curlArgs += "--retry-all-errors"
-      }
-
-      if ($resumeBytes -gt 0) {
-        $curlArgs += @("-C", "-")
-      }
-
-      $curlArgs += @("-o", $tempPath, $Url)
-      & curl.exe @curlArgs
-      $exitCode = $LASTEXITCODE
+      $exitCode = Invoke-CurlDownload $Url $target $tempPath
 
       if ($exitCode -eq 0) {
         Move-Item -LiteralPath $tempPath -Destination $target -Force
@@ -258,6 +326,144 @@ function Invoke-SetupDownload($Url, $OutputPath) {
   }
 
   throw "Download failed after $maxAttempts attempts: $Url"
+}
+
+function Invoke-ParallelCurlDownloads($Downloads) {
+  if (!(Test-Command "curl.exe")) {
+    return $false
+  }
+
+  $maxParallel = [Math]::Max(1, [Math]::Min(8, $parallelBackendDownloads))
+  $maxRounds = 12
+  $pending = @($Downloads)
+  $running = @()
+
+  Write-Host "Parallel downloads: $maxParallel"
+
+  for ($round = 1; $round -le $maxRounds; $round++) {
+    while ($pending.Count -gt 0 -or $running.Count -gt 0) {
+      while ($pending.Count -gt 0 -and $running.Count -lt $maxParallel) {
+        $item = $pending[0]
+        $pending = @($pending | Select-Object -Skip 1)
+
+        if (Test-Path -LiteralPath $item.TargetPath) {
+          $existingTarget = Get-Item -LiteralPath $item.TargetPath
+          if ($existingTarget.Length -gt 0) {
+            Write-Host "Already downloaded: $($item.Name)"
+            continue
+          }
+
+          Remove-Item -LiteralPath $item.TargetPath -Force
+        }
+
+        $resumeBytes = 0
+        if (Test-Path -LiteralPath $item.TempPath) {
+          $resumeBytes = (Get-Item -LiteralPath $item.TempPath).Length
+        }
+
+        $resumeText = ""
+        if ($resumeBytes -gt 0) {
+          $resumeText = ", resume $([math]::Round($resumeBytes / 1MB, 1)) MB"
+        }
+
+        $candidateUrls = @($item.Urls)
+        if (!$candidateUrls -or $candidateUrls.Count -eq 0) {
+          $candidateUrls = @(Get-DownloadUrls $item.Url)
+        }
+        $urlIndex = [Math]::Min($round - 1, $candidateUrls.Count - 1)
+        $downloadUrl = $candidateUrls[$urlIndex]
+
+        Write-Host "Downloading: $($item.Name) ($(Get-DownloadSourceLabel $downloadUrl), round $round/$maxRounds$resumeText)"
+        $arguments = New-CurlArgumentList $downloadUrl $item.TempPath $resumeBytes
+        $stdout = "$($item.TempPath).out.log"
+        $stderr = "$($item.TempPath).err.log"
+
+        Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
+        $process = Start-Process -FilePath "curl.exe" -ArgumentList $arguments -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $running += [pscustomobject]@{
+          Item = $item
+          Process = $process
+          StdErr = $stderr
+        }
+      }
+
+      if ($running.Count -eq 0) {
+        break
+      }
+
+      Start-Sleep -Milliseconds 500
+      $stillRunning = @()
+      foreach ($entry in $running) {
+        $entry.Process.Refresh()
+        if (!$entry.Process.HasExited) {
+          $stillRunning += $entry
+          continue
+        }
+
+        $entry.Process.WaitForExit()
+        $exitCode = $entry.Process.ExitCode
+        $item = $entry.Item
+        if ($exitCode -eq 0 -and (Test-Path -LiteralPath $item.TempPath)) {
+          Move-Item -LiteralPath $item.TempPath -Destination $item.TargetPath -Force
+          Remove-Item -LiteralPath "$($item.TempPath).aria2",$entry.StdErr,"$($item.TempPath).out.log" -Force -ErrorAction SilentlyContinue
+          Write-Host "Downloaded: $($item.Name)"
+          continue
+        }
+
+        if ($exitCode -eq 33 -and (Test-Path -LiteralPath $item.TempPath)) {
+          Write-Host "Server refused resume for $($item.Name); restarting this part from zero."
+          Remove-Item -LiteralPath $item.TempPath -Force
+        }
+
+        $err = ""
+        if (Test-Path -LiteralPath $entry.StdErr) {
+          $err = (Get-Content -LiteralPath $entry.StdErr -Raw -ErrorAction SilentlyContinue).Trim()
+        }
+        if ($err) {
+          Write-Host "Download failed: $($item.Name) ($err)"
+        } else {
+          Write-Host "Download failed: $($item.Name) (exit $exitCode)"
+        }
+
+        if ($round -lt $maxRounds) {
+          $pending += $item
+        } else {
+          throw "Download failed after $maxRounds rounds: $($item.Url)"
+        }
+      }
+
+      $running = $stillRunning
+    }
+
+    if ($pending.Count -eq 0 -and $running.Count -eq 0) {
+      return $true
+    }
+
+    Start-Sleep -Seconds ([math]::Min(60, 5 * $round))
+  }
+
+  throw "Download failed after $maxRounds rounds."
+}
+
+function Test-UsingDefaultBackendParts {
+  return (!$VoiceChangerPartUrls -or $VoiceChangerPartUrls.Count -eq 0) -and !$env:XIUXIULIAN_BACKEND_PART_URLS
+}
+
+function Assert-BackendZipIntegrity($ZipPath) {
+  if (!(Test-UsingDefaultBackendParts)) {
+    return
+  }
+
+  $zip = Get-Item -LiteralPath $ZipPath
+  if ($zip.Length -ne $defaultBackendZipBytes) {
+    throw "Backend package size is wrong. Expected $defaultBackendZipBytes bytes, got $($zip.Length). Re-run setup-windows.bat to download again."
+  }
+
+  Write-Host "Verifying backend package..."
+  $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath).Hash.ToUpperInvariant()
+  if ($hash -ne $defaultBackendZipSha256) {
+    throw "Backend package checksum failed. Re-run setup-windows.bat to download again."
+  }
 }
 
 function Get-BackendPartUrls {
@@ -312,15 +518,30 @@ function Download-BackendParts {
   New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
 
   $partPaths = @()
+  $downloads = @()
   for ($i = 0; $i -lt $partUrls.Count; $i++) {
     $fallbackName = "VoiceChanger.zip.{0:D3}" -f ($i + 1)
     $fileName = Get-DownloadFileName $partUrls[$i] $fallbackName
     $partPath = Join-Path $downloadDir $fileName
-    Invoke-SetupDownload $partUrls[$i] $partPath
+    $downloads += [pscustomobject]@{
+      Url = $partUrls[$i]
+      Urls = @(Get-DownloadUrls $partUrls[$i])
+      Name = $fileName
+      TargetPath = [System.IO.Path]::GetFullPath($partPath)
+      TempPath = [System.IO.Path]::GetFullPath("$partPath.download")
+    }
     $partPaths += $partPath
   }
 
-  return Merge-BackendParts $partPaths (Join-Path $downloadDir "VoiceChanger.zip")
+  if (!(Invoke-ParallelCurlDownloads $downloads)) {
+    foreach ($download in $downloads) {
+      Invoke-SetupDownload $download.Url $download.TargetPath
+    }
+  }
+
+  $zipPath = Merge-BackendParts $partPaths (Join-Path $downloadDir "VoiceChanger.zip")
+  Assert-BackendZipIntegrity $zipPath
+  return $zipPath
 }
 
 function Add-NodeToCurrentPath {

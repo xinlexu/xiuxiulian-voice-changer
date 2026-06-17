@@ -19,7 +19,7 @@ D:\XiuxiulianVoiceChanger
 setup-windows.bat
 ```
 
-安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大；安装器会优先使用多线程下载，并且网络中断后重新运行 `setup-windows.bat` 会从已下载的位置继续。
+安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大；安装器会优先使用国内可访问的 GitHub 加速镜像和多线程下载，并且网络中断后重新运行 `setup-windows.bat` 会从已下载的位置继续。
 
 ```text
 1. 下载路径
@@ -41,7 +41,7 @@ start-windows.bat
 
 ## 后端包说明
 
-默认安装脚本会从 GitHub Release 自动下载后端分卷，合并后解压到软件目录。后端包解压后必须包含：
+默认安装脚本会从 GitHub Release 自动下载后端分卷，合并后会校验 SHA256，再解压到软件目录。后端包解压后必须包含：
 
 ```text
 VoiceChanger
