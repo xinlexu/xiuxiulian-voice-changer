@@ -10,6 +10,7 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
+$setupVersion = "2026-06-17-drivefix"
 
 function Write-Step {
   param(
@@ -242,6 +243,8 @@ function Start-App {
     Pop-Location
   }
 }
+
+Write-Host "Setup version: $setupVersion"
 
 $voiceRoot = Ensure-VoiceChangerBackend
 if (!$voiceRoot) {
