@@ -4,9 +4,9 @@
 
 ## 从零安装
 
-适用场景：电脑上什么都没有。
+软件安装包：[点击下载 xiuxiulian-voice-changer.zip](https://github.com/xinlexu/xiuxiulian-voice-changer/archive/refs/heads/main.zip)
 
-1. 下载本项目 Release 压缩包。
+1. 下载上面的软件安装包。
 2. 解压到一个固定文件夹，例如：
 
 ```text
