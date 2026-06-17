@@ -19,7 +19,7 @@ D:\XiuxiulianVoiceChanger
 setup-windows.bat
 ```
 
-安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大；如果网络中断，重新运行 `setup-windows.bat` 会从已下载的位置继续。
+安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大；安装器会优先使用多线程下载，并且网络中断后重新运行 `setup-windows.bat` 会从已下载的位置继续。
 
 ```text
 1. 下载路径

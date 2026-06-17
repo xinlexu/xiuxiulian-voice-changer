@@ -12,10 +12,11 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
-$setupVersion = "2026-06-17-resume-download"
+$setupVersion = "2026-06-17-accelerated-download"
 $defaultBackendReleaseTag = $(if ($env:XIUXIULIAN_BACKEND_RELEASE_TAG) { $env:XIUXIULIAN_BACKEND_RELEASE_TAG } else { "backend-v2" })
 $defaultBackendPartCount = $(if ($env:XIUXIULIAN_BACKEND_PART_COUNT) { [int]$env:XIUXIULIAN_BACKEND_PART_COUNT } else { 22 })
 $script:curlSupportsRetryAllErrors = $null
+$script:aria2Command = $null
 
 function Write-Step {
   param(
@@ -29,6 +30,69 @@ function Write-Step {
 
 function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-Aria2Command {
+  if ($script:aria2Command -and (Test-Path -LiteralPath $script:aria2Command)) {
+    return $script:aria2Command
+  }
+
+  $command = Get-Command "aria2c.exe" -ErrorAction SilentlyContinue
+  if ($command) {
+    $script:aria2Command = $command.Source
+    return $script:aria2Command
+  }
+
+  $candidatePaths = @()
+  foreach ($programRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (!$programRoot) { continue }
+    $candidatePaths += (Join-Path $programRoot "aria2\aria2c.exe")
+    $candidatePaths += (Join-Path $programRoot "aria2c\aria2c.exe")
+  }
+
+  foreach ($candidate in $candidatePaths) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+      $script:aria2Command = $candidate
+      return $script:aria2Command
+    }
+  }
+
+  $wingetPackages = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages"
+  if (Test-Path -LiteralPath $wingetPackages) {
+    $match = Get-ChildItem -Path $wingetPackages -Directory -Filter "aria2.aria2_*" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending |
+      ForEach-Object {
+        Get-ChildItem -Path $_.FullName -Filter "aria2c.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      } |
+      Select-Object -First 1
+
+    if ($match) {
+      $script:aria2Command = $match.FullName
+      return $script:aria2Command
+    }
+  }
+
+  return ""
+}
+
+function Ensure-Aria2 {
+  $aria2 = Get-Aria2Command
+  if ($aria2) {
+    return $aria2
+  }
+
+  if (!(Test-Command "winget")) {
+    return ""
+  }
+
+  Write-Host "Installing download accelerator..."
+  winget install --id aria2.aria2 -e --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Download accelerator install failed; using built-in downloader."
+    return ""
+  }
+
+  return Get-Aria2Command
 }
 
 function Test-CurlRetryAllErrors {
@@ -66,6 +130,48 @@ function Get-DownloadFileName($Url, $FallbackName) {
   return $FallbackName
 }
 
+function Invoke-Aria2Download($Url, $OutputPath, $TempPath) {
+  $aria2 = Ensure-Aria2
+  if (!$aria2) {
+    return $false
+  }
+
+  $targetDir = Split-Path ([System.IO.Path]::GetFullPath($OutputPath)) -Parent
+  $tempName = Split-Path $TempPath -Leaf
+  Write-Host "Using accelerated download: aria2c"
+
+  & $aria2 `
+    "--continue=true" `
+    "--max-connection-per-server=8" `
+    "--split=8" `
+    "--min-split-size=4M" `
+    "--max-tries=20" `
+    "--retry-wait=5" `
+    "--connect-timeout=30" `
+    "--timeout=60" `
+    "--lowest-speed-limit=1K" `
+    "--file-allocation=none" `
+    "--allow-overwrite=true" `
+    "--auto-file-renaming=false" `
+    "--summary-interval=10" `
+    "--console-log-level=warn" `
+    "--dir=$targetDir" `
+    "--out=$tempName" `
+    $Url
+
+  if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $TempPath)) {
+    Move-Item -LiteralPath $TempPath -Destination $OutputPath -Force
+    $controlPath = "$TempPath.aria2"
+    if (Test-Path -LiteralPath $controlPath) {
+      Remove-Item -LiteralPath $controlPath -Force
+    }
+    return $true
+  }
+
+  Write-Host "Accelerated download did not complete; using built-in downloader."
+  return $false
+}
+
 function Invoke-SetupDownload($Url, $OutputPath) {
   $target = [System.IO.Path]::GetFullPath($OutputPath)
   $targetDir = Split-Path $target -Parent
@@ -82,6 +188,10 @@ function Invoke-SetupDownload($Url, $OutputPath) {
   }
 
   $tempPath = "$target.download"
+  if (Invoke-Aria2Download $Url $target $tempPath) {
+    return
+  }
+
   $maxAttempts = 12
 
   for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
