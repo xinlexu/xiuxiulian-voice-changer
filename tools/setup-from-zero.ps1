@@ -71,9 +71,14 @@ function Ensure-NpmDependencies {
 
 function Test-VoiceRoot($Root) {
   if (!$Root) { return $false }
-  $resolved = [System.IO.Path]::GetFullPath($Root)
-  return (Test-Path (Join-Path $resolved "runtime\python.exe")) -and
-    (Test-Path (Join-Path $resolved "rvc_core"))
+  try {
+    $resolved = [System.IO.Path]::GetFullPath($Root)
+    $python = [System.IO.Path]::Combine($resolved, "runtime", "python.exe")
+    $core = [System.IO.Path]::Combine($resolved, "rvc_core")
+    return (Test-Path -LiteralPath $python) -and (Test-Path -LiteralPath $core)
+  } catch {
+    return $false
+  }
 }
 
 function Get-SavedVoiceRoot {
@@ -166,7 +171,7 @@ function Expand-VoiceChangerZip($ZipPath) {
 }
 
 function Ensure-VoiceChangerBackend {
-  Write-Step 1 "下载路径"
+  Write-Step 1 "Download path"
   Write-Host "Install folder: $projectRoot"
 
   $existingRoot = Find-VoiceRoot
@@ -209,7 +214,7 @@ function Ensure-VoiceChangerBackend {
 function Ensure-VirtualAudio {
   param([string]$VoiceRoot)
 
-  Write-Step 2 "安装声卡驱动"
+  Write-Step 2 "Install audio driver"
   $script = Join-Path $PSScriptRoot "setup-virtual-audio.ps1"
   $searchRoots = @($projectRoot, (Join-Path $projectRoot "VoiceChanger"))
   if ($VoiceRoot) {
@@ -223,7 +228,7 @@ function Ensure-VirtualAudio {
 }
 
 function Ensure-AppInstalled {
-  Write-Step 3 "软件安装"
+  Write-Step 3 "Install app"
   Ensure-Node
   Ensure-NpmDependencies
 }
