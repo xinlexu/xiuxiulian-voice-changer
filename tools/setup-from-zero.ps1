@@ -12,13 +12,10 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
-$setupVersion = "2026-06-17-backend-autodownload"
-$defaultBackendPartUrls = @(
-  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.001",
-  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.002",
-  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.003",
-  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.004"
-)
+$setupVersion = "2026-06-17-resume-download"
+$defaultBackendReleaseTag = $(if ($env:XIUXIULIAN_BACKEND_RELEASE_TAG) { $env:XIUXIULIAN_BACKEND_RELEASE_TAG } else { "backend-v2" })
+$defaultBackendPartCount = $(if ($env:XIUXIULIAN_BACKEND_PART_COUNT) { [int]$env:XIUXIULIAN_BACKEND_PART_COUNT } else { 22 })
+$script:curlSupportsRetryAllErrors = $null
 
 function Write-Step {
   param(
@@ -32,6 +29,28 @@ function Write-Step {
 
 function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Test-CurlRetryAllErrors {
+  if ($null -ne $script:curlSupportsRetryAllErrors) {
+    return $script:curlSupportsRetryAllErrors
+  }
+
+  try {
+    $help = & curl.exe --help all 2>$null
+    $script:curlSupportsRetryAllErrors = [bool]($help | Select-String -SimpleMatch "--retry-all-errors" -Quiet)
+  } catch {
+    $script:curlSupportsRetryAllErrors = $false
+  }
+
+  return $script:curlSupportsRetryAllErrors
+}
+
+function Get-DefaultBackendPartUrls {
+  for ($i = 1; $i -le $defaultBackendPartCount; $i++) {
+    $partName = "VoiceChanger.zip.{0:D3}" -f $i
+    "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/$defaultBackendReleaseTag/$partName"
+  }
 }
 
 function Get-DownloadFileName($Url, $FallbackName) {
@@ -52,22 +71,83 @@ function Invoke-SetupDownload($Url, $OutputPath) {
   $targetDir = Split-Path $target -Parent
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-  $tempPath = "$target.download"
-  if (Test-Path -LiteralPath $tempPath) {
-    Remove-Item -LiteralPath $tempPath -Force
-  }
-
-  Write-Host "Downloading: $(Split-Path $target -Leaf)"
-  if (Test-Command "curl.exe") {
-    & curl.exe -L --fail --retry 5 --retry-delay 3 --connect-timeout 30 -o $tempPath $Url
-    if ($LASTEXITCODE -ne 0) {
-      throw "Download failed: $Url"
+  if (Test-Path -LiteralPath $target) {
+    $existingTarget = Get-Item -LiteralPath $target
+    if ($existingTarget.Length -gt 0) {
+      Write-Host "Already downloaded: $(Split-Path $target -Leaf)"
+      return
     }
-  } else {
-    Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing
+
+    Remove-Item -LiteralPath $target -Force
   }
 
-  Move-Item -LiteralPath $tempPath -Destination $target -Force
+  $tempPath = "$target.download"
+  $maxAttempts = 12
+
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $resumeBytes = 0
+    if (Test-Path -LiteralPath $tempPath) {
+      $resumeBytes = (Get-Item -LiteralPath $tempPath).Length
+    }
+
+    $resumeText = ""
+    if ($resumeBytes -gt 0) {
+      $resumeText = ", resume $([math]::Round($resumeBytes / 1MB, 1)) MB"
+    }
+
+    Write-Host "Downloading: $(Split-Path $target -Leaf) (try $attempt/$maxAttempts$resumeText)"
+
+    if (Test-Command "curl.exe") {
+      $curlArgs = @(
+        "-L",
+        "--fail",
+        "--connect-timeout", "30",
+        "--retry", "3",
+        "--retry-delay", "5",
+        "--speed-time", "60",
+        "--speed-limit", "1024"
+      )
+
+      if (Test-CurlRetryAllErrors) {
+        $curlArgs += "--retry-all-errors"
+      }
+
+      if ($resumeBytes -gt 0) {
+        $curlArgs += @("-C", "-")
+      }
+
+      $curlArgs += @("-o", $tempPath, $Url)
+      & curl.exe @curlArgs
+      $exitCode = $LASTEXITCODE
+
+      if ($exitCode -eq 0) {
+        Move-Item -LiteralPath $tempPath -Destination $target -Force
+        return
+      }
+
+      if ($exitCode -eq 33 -and (Test-Path -LiteralPath $tempPath)) {
+        Write-Host "Server refused resume; restarting this part from zero."
+        Remove-Item -LiteralPath $tempPath -Force
+      }
+    } else {
+      try {
+        if (Test-Path -LiteralPath $tempPath) {
+          Remove-Item -LiteralPath $tempPath -Force
+        }
+        Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing
+        Move-Item -LiteralPath $tempPath -Destination $target -Force
+        return
+      } catch {
+        Write-Host "Download attempt failed: $($_.Exception.Message)"
+      }
+    }
+
+    if ($attempt -lt $maxAttempts) {
+      Start-Sleep -Seconds ([math]::Min(60, 5 * $attempt))
+    }
+  }
+
+  throw "Download failed after $maxAttempts attempts: $Url"
 }
 
 function Get-BackendPartUrls {
@@ -83,7 +163,7 @@ function Get-BackendPartUrls {
     )
   }
 
-  return $defaultBackendPartUrls
+  return @(Get-DefaultBackendPartUrls)
 }
 
 function Merge-BackendParts($PartPaths, $OutputPath) {
@@ -115,6 +195,8 @@ function Download-BackendParts {
   if (!$partUrls -or $partUrls.Count -eq 0) {
     return ""
   }
+
+  Write-Host "Backend package parts: $($partUrls.Count)"
 
   $downloadDir = Join-Path $projectRoot ".xiuxiulian-downloads"
   New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null

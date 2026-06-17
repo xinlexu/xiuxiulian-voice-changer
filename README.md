@@ -19,7 +19,7 @@ D:\XiuxiulianVoiceChanger
 setup-windows.bat
 ```
 
-安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大，请保持网络稳定。
+安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大；如果网络中断，重新运行 `setup-windows.bat` 会从已下载的位置继续。
 
 ```text
 1. 下载路径
@@ -66,13 +66,13 @@ VoiceChanger
 
 ## 发布说明
 
-源码仓库不提交大型后端、模型和驱动压缩包。发布给朋友时，后端包通过 GitHub Release 分卷提供：
+源码仓库不提交大型后端、模型和驱动压缩包。发布给朋友时，后端包通过 GitHub Release 小分卷提供：
 
 ```text
 VoiceChanger.zip.001
 VoiceChanger.zip.002
-VoiceChanger.zip.003
-VoiceChanger.zip.004
+...
+VoiceChanger.zip.022
 ```
 
 可以用这个脚本从本机后端生成 `release\VoiceChanger.zip`，再按发布平台的单文件大小限制切分上传：
