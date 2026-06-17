@@ -7,6 +7,8 @@ $ErrorActionPreference = "Stop"
 $resolvedVoiceRoot = [System.IO.Path]::GetFullPath($VoiceRoot)
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
 $outputDir = Split-Path $resolvedOutput -Parent
+$parent = Split-Path $resolvedVoiceRoot -Parent
+$folderName = Split-Path $resolvedVoiceRoot -Leaf
 
 if (!(Test-Path (Join-Path $resolvedVoiceRoot "runtime\python.exe"))) {
   throw "runtime\python.exe was not found under $resolvedVoiceRoot"
@@ -22,13 +24,30 @@ if (Test-Path $resolvedOutput) {
   Remove-Item -LiteralPath $resolvedOutput -Force
 }
 
-Write-Host "Packaging backend:"
+$excludeArgs = @(
+  "--exclude=$folderName/wuyuervc.exe",
+  "--exclude=$folderName/wuyuervc.exe.WebView2",
+  "--exclude=$folderName/AI降噪.exe",
+  "--exclude=$folderName/runtime/**/*.lib",
+  "--exclude=$folderName/runtime/**/*.pdb",
+  "--exclude=$folderName/runtime/**/*.pyc",
+  "--exclude=$folderName/runtime/**/__pycache__",
+  "--exclude=$folderName/rvc_core/**/__pycache__",
+  "--exclude=$folderName/rvc_core/**/*.pyc"
+)
+
+Write-Host "Packaging backend release zip:"
 Write-Host "  Source: $resolvedVoiceRoot"
 Write-Host "  Output: $resolvedOutput"
+Write-Host "  Excluded: old shell exe, WebView, static libs, debug/cache files"
 Write-Host ""
-Write-Host "Only publish this zip if you have the right to redistribute every included file and model."
+Write-Host "Only publish this zip if you have the right to redistribute every included runtime, model, and driver file."
 Write-Host ""
 
-Compress-Archive -Path (Join-Path $resolvedVoiceRoot "*") -DestinationPath $resolvedOutput -CompressionLevel Optimal
+& tar @excludeArgs -a -c -f $resolvedOutput -C $parent $folderName
+if ($LASTEXITCODE -ne 0) {
+  throw "tar failed with exit code $LASTEXITCODE"
+}
 
-Write-Host "Done."
+$size = (Get-Item -LiteralPath $resolvedOutput).Length
+Write-Host "Done. Size: $([math]::Round($size / 1GB, 2)) GB"

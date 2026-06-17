@@ -779,13 +779,16 @@ export async function resolveModelPath(config) {
 
   const models = await listModels();
   const normalizedCurrent = current.toLowerCase();
+  const normalizedBaseName = path.basename(current).toLowerCase();
   const match = models.find((model) => {
     return (
       model.modelFile.toLowerCase() === normalizedCurrent ||
+      model.modelFile.toLowerCase() === normalizedBaseName ||
       model.folder.toLowerCase() === normalizedCurrent ||
       model.id.toLowerCase() === normalizedCurrent ||
       model.name.toLowerCase() === normalizedCurrent ||
-      path.basename(model.modelPath || "").toLowerCase() === normalizedCurrent
+      path.basename(model.modelPath || "").toLowerCase() === normalizedCurrent ||
+      path.basename(model.modelPath || "").toLowerCase() === normalizedBaseName
     );
   });
 

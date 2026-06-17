@@ -1,16 +1,24 @@
 param(
   [string]$VoiceChangerZipUrl = $env:XIUXIULIAN_BACKEND_ZIP_URL,
+  [string[]]$VoiceChangerPartUrls = @(),
   [switch]$StartApp
 )
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $settingsDir = Join-Path $env:APPDATA "xiuxiulian-voice-changer"
 $settingsPath = Join-Path $settingsDir "settings.json"
 $nodeUrl = "https://nodejs.org/"
-$setupVersion = "2026-06-17-drivefix"
+$setupVersion = "2026-06-17-backend-autodownload"
+$defaultBackendPartUrls = @(
+  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.001",
+  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.002",
+  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.003",
+  "https://github.com/xinlexu/xiuxiulian-voice-changer/releases/download/backend-v1/VoiceChanger.zip.004"
+)
 
 function Write-Step {
   param(
@@ -24,6 +32,103 @@ function Write-Step {
 
 function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-DownloadFileName($Url, $FallbackName) {
+  try {
+    $uri = [Uri]$Url
+    $name = [System.IO.Path]::GetFileName($uri.AbsolutePath)
+    if ($name) {
+      return $name
+    }
+  } catch {
+  }
+
+  return $FallbackName
+}
+
+function Invoke-SetupDownload($Url, $OutputPath) {
+  $target = [System.IO.Path]::GetFullPath($OutputPath)
+  $targetDir = Split-Path $target -Parent
+  New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
+  $tempPath = "$target.download"
+  if (Test-Path -LiteralPath $tempPath) {
+    Remove-Item -LiteralPath $tempPath -Force
+  }
+
+  Write-Host "Downloading: $(Split-Path $target -Leaf)"
+  if (Test-Command "curl.exe") {
+    & curl.exe -L --fail --retry 5 --retry-delay 3 --connect-timeout 30 -o $tempPath $Url
+    if ($LASTEXITCODE -ne 0) {
+      throw "Download failed: $Url"
+    }
+  } else {
+    Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing
+  }
+
+  Move-Item -LiteralPath $tempPath -Destination $target -Force
+}
+
+function Get-BackendPartUrls {
+  if ($VoiceChangerPartUrls -and $VoiceChangerPartUrls.Count -gt 0) {
+    return $VoiceChangerPartUrls
+  }
+
+  if ($env:XIUXIULIAN_BACKEND_PART_URLS) {
+    return @(
+      $env:XIUXIULIAN_BACKEND_PART_URLS -split "[;`r`n]+" |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+    )
+  }
+
+  return $defaultBackendPartUrls
+}
+
+function Merge-BackendParts($PartPaths, $OutputPath) {
+  $zipFullPath = [System.IO.Path]::GetFullPath($OutputPath)
+  if (Test-Path -LiteralPath $zipFullPath) {
+    Remove-Item -LiteralPath $zipFullPath -Force
+  }
+
+  Write-Host "Merging backend package..."
+  $outStream = [System.IO.File]::Create($zipFullPath)
+  try {
+    foreach ($part in $PartPaths) {
+      $inStream = [System.IO.File]::OpenRead($part)
+      try {
+        $inStream.CopyTo($outStream)
+      } finally {
+        $inStream.Dispose()
+      }
+    }
+  } finally {
+    $outStream.Dispose()
+  }
+
+  return $zipFullPath
+}
+
+function Download-BackendParts {
+  $partUrls = @(Get-BackendPartUrls)
+  if (!$partUrls -or $partUrls.Count -eq 0) {
+    return ""
+  }
+
+  $downloadDir = Join-Path $projectRoot ".xiuxiulian-downloads"
+  New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+
+  $partPaths = @()
+  for ($i = 0; $i -lt $partUrls.Count; $i++) {
+    $fallbackName = "VoiceChanger.zip.{0:D3}" -f ($i + 1)
+    $fileName = Get-DownloadFileName $partUrls[$i] $fallbackName
+    $partPath = Join-Path $downloadDir $fileName
+    Invoke-SetupDownload $partUrls[$i] $partPath
+    $partPaths += $partPath
+  }
+
+  return Merge-BackendParts $partPaths (Join-Path $downloadDir "VoiceChanger.zip")
 }
 
 function Add-NodeToCurrentPath {
@@ -146,29 +251,41 @@ function Expand-VoiceChangerZip($ZipPath) {
   $tempRoot = Join-Path $env:TEMP ("xiuxiulian-backend-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
-  Write-Host "Extracting backend package..."
-  Expand-Archive -Path $zipFullPath -DestinationPath $tempRoot -Force
+  try {
+    Write-Host "Extracting backend package..."
+    Expand-Archive -Path $zipFullPath -DestinationPath $tempRoot -Force
 
-  $sourceRoot = ""
-  if (Test-VoiceRoot $tempRoot) {
-    $sourceRoot = $tempRoot
-  } elseif (Test-VoiceRoot (Join-Path $tempRoot "VoiceChanger")) {
-    $sourceRoot = Join-Path $tempRoot "VoiceChanger"
-  } else {
-    $match = Get-ChildItem -Path $tempRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-      Where-Object { Test-VoiceRoot $_.FullName } |
-      Select-Object -First 1
-    if ($match) {
-      $sourceRoot = $match.FullName
+    $sourceRoot = ""
+    if (Test-VoiceRoot $tempRoot) {
+      $sourceRoot = $tempRoot
+    } elseif (Test-VoiceRoot (Join-Path $tempRoot "VoiceChanger")) {
+      $sourceRoot = Join-Path $tempRoot "VoiceChanger"
+    } else {
+      $match = Get-ChildItem -Path $tempRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { Test-VoiceRoot $_.FullName } |
+        Select-Object -First 1
+      if ($match) {
+        $sourceRoot = $match.FullName
+      }
+    }
+
+    if (!$sourceRoot) {
+      throw "VoiceChanger.zip does not contain runtime\python.exe and rvc_core."
+    }
+
+    if ($sourceRoot -eq $tempRoot) {
+      New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+      Get-ChildItem -LiteralPath $tempRoot -Force | Move-Item -Destination $targetRoot
+    } else {
+      Move-Item -LiteralPath $sourceRoot -Destination $targetRoot
+    }
+
+    return $targetRoot
+  } finally {
+    if (Test-Path -LiteralPath $tempRoot) {
+      Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
   }
-
-  if (!$sourceRoot) {
-    throw "VoiceChanger.zip does not contain runtime\python.exe and rvc_core."
-  }
-
-  Copy-Item -Path $sourceRoot -Destination $targetRoot -Recurse
-  return $targetRoot
 }
 
 function Ensure-VoiceChangerBackend {
@@ -198,18 +315,36 @@ function Ensure-VoiceChangerBackend {
   }
 
   if ($VoiceChangerZipUrl) {
-    $downloadPath = Join-Path $projectRoot "VoiceChanger.zip"
+    $downloadDir = Join-Path $projectRoot ".xiuxiulian-downloads"
+    $downloadPath = Join-Path $downloadDir "VoiceChanger.zip"
     Write-Host "Downloading backend package to: $downloadPath"
-    Invoke-WebRequest -Uri $VoiceChangerZipUrl -OutFile $downloadPath
-    $root = Expand-VoiceChangerZip $downloadPath
-    Save-VoiceRoot $root
-    return $root
+    Invoke-SetupDownload $VoiceChangerZipUrl $downloadPath
+    try {
+      $root = Expand-VoiceChangerZip $downloadPath
+      Save-VoiceRoot $root
+      return $root
+    } finally {
+      if (Test-Path -LiteralPath $downloadDir) {
+        Remove-Item -LiteralPath $downloadDir -Recurse -Force
+      }
+    }
   }
 
-  Write-Host "Missing backend package."
-  Write-Host "Put VoiceChanger.zip in this folder, then run setup-windows.bat again:"
-  Write-Host "  $projectRoot"
-  return ""
+  $downloadedZip = Download-BackendParts
+  if ($downloadedZip) {
+    $downloadDir = Split-Path $downloadedZip -Parent
+    try {
+      $root = Expand-VoiceChangerZip $downloadedZip
+      Save-VoiceRoot $root
+      return $root
+    } finally {
+      if (Test-Path -LiteralPath $downloadDir) {
+        Remove-Item -LiteralPath $downloadDir -Recurse -Force
+      }
+    }
+  }
+
+  throw "Backend package is not configured. Set XIUXIULIAN_BACKEND_ZIP_URL or XIUXIULIAN_BACKEND_PART_URLS, then run setup-windows.bat again."
 }
 
 function Ensure-VirtualAudio {

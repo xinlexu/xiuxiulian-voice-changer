@@ -4,7 +4,7 @@
 
 ## 从零安装
 
-软件安装包：[点击下载 xiuxiulian-voice-changer.zip](https://github.com/xinlexu/xiuxiulian-voice-changer/archive/7e6d5fd415505a64a17fbb8389066a0d29f659ba.zip)
+软件安装包：[点击下载 xiuxiulian-voice-changer.zip](https://github.com/xinlexu/xiuxiulian-voice-changer/archive/refs/heads/main.zip)
 
 1. 下载上面的软件安装包。
 2. 如果之前解压过旧版本，先删除旧文件夹，再解压到一个固定文件夹，例如：
@@ -13,19 +13,13 @@
 D:\XiuxiulianVoiceChanger
 ```
 
-3. 把后端包放进这个文件夹，文件名固定为：
-
-```text
-VoiceChanger.zip
-```
-
-4. 双击：
+3. 双击：
 
 ```text
 setup-windows.bat
 ```
 
-安装器会按固定顺序执行：
+安装器会按固定顺序执行。首次安装会自动下载后端运行包，文件比较大，请保持网络稳定。
 
 ```text
 1. 下载路径
@@ -45,9 +39,9 @@ http://127.0.0.1:5174/
 start-windows.bat
 ```
 
-## 后端包要求
+## 后端包说明
 
-`VoiceChanger.zip` 解压后必须包含：
+默认安装脚本会从 GitHub Release 自动下载后端分卷，合并后解压到软件目录。后端包解压后必须包含：
 
 ```text
 VoiceChanger
@@ -72,14 +66,16 @@ VoiceChanger
 
 ## 发布说明
 
-源码仓库不提交大型后端、模型和驱动压缩包。发布给朋友时，用 GitHub Release 上传两个压缩包：
+源码仓库不提交大型后端、模型和驱动压缩包。发布给朋友时，后端包通过 GitHub Release 分卷提供：
 
 ```text
-xiuxiulian-voice-changer.zip
-VoiceChanger.zip
+VoiceChanger.zip.001
+VoiceChanger.zip.002
+VoiceChanger.zip.003
+VoiceChanger.zip.004
 ```
 
-可以用这个脚本从本机后端生成 `release\VoiceChanger.zip`：
+可以用这个脚本从本机后端生成 `release\VoiceChanger.zip`，再按发布平台的单文件大小限制切分上传：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\package-voicechanger-backend.ps1 -VoiceRoot "D:\VoiceChanger"
