@@ -1,0 +1,1 @@
+SoundCard 0.4.6 (BSD-3-Clause, https://github.com/bastibe/SoundCard) - bundled unmodified; used for direct WASAPI when PortAudio's WASAPI stream won't start.

@@ -1,10 +1,25 @@
-node_modules/
-dist/
+# large runtime pieces (downloaded by scripts/setup.ps1)
+/runtime/
+/dependencies/
+/Assets/
+/配置文件/
+/VB虚拟.zip
+/XiuxiulianRuntime.zip
+/VoiceChanger.zip
+/.xiuxiulian-downloads/
+/release/
+
+# user data
+/data/
+
+# build / tooling
+ui/node_modules/
+__pycache__/
+*.pyc
 *.log
-.env
-.env.local
-VoiceChanger/
-VoiceChanger*.zip
-backend.zip
-release/
 .DS_Store
+
+# Never commit model weights or archives
+*.pth
+*.pt
+*.zip
