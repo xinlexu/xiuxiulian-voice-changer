@@ -386,6 +386,8 @@ function Invoke-ParallelCurlDownloads($Downloads) {
         Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
         $quotedArguments = @($arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' })
         $process = Start-Process -FilePath "curl.exe" -ArgumentList $quotedArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        # Cache the process handle before it exits so Windows PowerShell preserves ExitCode.
+        $null = $process.Handle
         $running += [pscustomobject]@{
           Item = $item
           Process = $process
@@ -423,7 +425,7 @@ function Invoke-ParallelCurlDownloads($Downloads) {
 
         $err = ""
         if (Test-Path -LiteralPath $entry.StdErr) {
-          $err = (Get-Content -LiteralPath $entry.StdErr -Raw -ErrorAction SilentlyContinue).Trim()
+          $err = ([string](Get-Content -LiteralPath $entry.StdErr -Raw -ErrorAction SilentlyContinue)).Trim()
         }
         if ($err) {
           Write-Host "Download failed: $($item.Name) ($err)"
