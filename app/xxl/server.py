@@ -90,7 +90,9 @@ class App:
         patch = {}
         if not cfg["output_device"]:
             cable = [d for d in devices["outputs"] if d["virtual"]]
-            cable.sort(key=lambda d: (0 if ("伴侣" in d["name"] or "CABLE Input" in d["name"]) else 1))
+            # VB-Audio's cable first ("CABLE Input", "CABLE-A Input", renamed "伴侣扬声器"),
+            # not e.g. "Steam Streaming Speakers"
+            cable.sort(key=lambda d: (0 if ("伴侣" in d["name"] or "VB-Audio" in d["name"]) else 1))
             if cable:
                 patch["output_device"] = cable[0]["name"]
         if not cfg["input_device"]:

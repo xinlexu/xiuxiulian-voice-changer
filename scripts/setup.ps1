@@ -27,7 +27,7 @@ $script:aria2Command = $null
 # Parts of the old 五月变声 package that the new engine does not use.
 $legacyItems = @("wuyuervc.exe", "wuyuervc.exe.WebView2", "AI降噪.exe", "rvc_core", "Launchers", "AppSettings",
   "configs", "tools", "userconfig.json", "配置文件\voice.exe", "dependencies\infer_lib", "dependencies\tools",
-  "dependencies\__pycache__", "dependencies\__init__.py", "Assets\PremiumModels")
+  "dependencies\__pycache__", "dependencies\__init__.py", "Assets\PremiumModels", "配置文件\111")
 
 function Write-Step {
   param([int]$Number, [string]$Message)
@@ -345,6 +345,7 @@ function Invoke-ParallelCurlDownloads($Downloads) {
   Write-Host "Parallel downloads: $maxParallel"
 
   for ($round = 1; $round -le $maxRounds; $round++) {
+    $retry = @()
     while ($pending.Count -gt 0 -or $running.Count -gt 0) {
       while ($pending.Count -gt 0 -and $running.Count -lt $maxParallel) {
         $item = $pending[0]
@@ -383,7 +384,8 @@ function Invoke-ParallelCurlDownloads($Downloads) {
         $stderr = "$($item.TempPath).err.log"
 
         Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
-        $process = Start-Process -FilePath "curl.exe" -ArgumentList $arguments -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $quotedArguments = @($arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' })
+        $process = Start-Process -FilePath "curl.exe" -ArgumentList $quotedArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         $running += [pscustomobject]@{
           Item = $item
           Process = $process
@@ -430,7 +432,7 @@ function Invoke-ParallelCurlDownloads($Downloads) {
         }
 
         if ($round -lt $maxRounds) {
-          $pending += $item
+          $retry += $item
         } else {
           throw "Download failed after $maxRounds rounds: $($item.Url)"
         }
@@ -439,6 +441,7 @@ function Invoke-ParallelCurlDownloads($Downloads) {
       $running = $stillRunning
     }
 
+    $pending = @($retry)
     if ($pending.Count -eq 0 -and $running.Count -eq 0) {
       return $true
     }
@@ -460,13 +463,13 @@ function Assert-BackendZipIntegrity($ZipPath) {
 
   $zip = Get-Item -LiteralPath $ZipPath
   if ($zip.Length -ne $defaultBackendZipBytes) {
-    throw "Backend package size is wrong. Expected $defaultBackendZipBytes bytes, got $($zip.Length). Re-run setup-windows.bat to download again."
+    throw "Backend package size is wrong. Expected $defaultBackendZipBytes bytes, got $($zip.Length). Re-run the first-time setup batch file to download again."
   }
 
   Write-Host "Verifying backend package..."
   $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath).Hash.ToUpperInvariant()
   if ($hash -ne $defaultBackendZipSha256) {
-    throw "Backend package checksum failed. Re-run setup-windows.bat to download again."
+    throw "Backend package checksum failed. Re-run the first-time setup batch file to download again."
   }
 }
 
@@ -545,18 +548,30 @@ function Download-BackendParts {
 
   $zipPath = Merge-BackendParts $partPaths (Join-Path $downloadDir "VoiceChanger.zip")
   Assert-BackendZipIntegrity $zipPath
+  # the parts are no longer needed once the merged package checks out (saves 5.6 GB of disk)
+  foreach ($part in $partPaths) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
   return $zipPath
 }
 
 
 function Test-RuntimeReady {
-  return (Test-Path -LiteralPath (Join-Path $projectRoot "runtime\pythonw.exe")) -and
-    (Test-Path -LiteralPath (Join-Path $projectRoot "dependencies\basemodels\hubert_base.pt"))
+  return (Test-Path -LiteralPath (Join-Path $projectRoot "runtime\python.exe")) -and
+    (Test-Path -LiteralPath (Join-Path $projectRoot "runtime\pythonw.exe")) -and
+    (Test-Path -LiteralPath (Join-Path $projectRoot "dependencies\basemodels\hubert_base.pt")) -and
+    (Test-Path -LiteralPath (Join-Path $projectRoot "dependencies\basemodels\rmvpe.pt"))
 }
 
 function Merge-RuntimeZip($ZipPath) {
-  $tempRoot = Join-Path $env:TEMP ("xiuxiulian-runtime-" + [Guid]::NewGuid().ToString("N"))
-  New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  # Extract to a short folder at the root of the install drive: same drive, so moving the
+  # files afterwards is instant and needs no extra space on C:, and short, because some
+  # PyTorch files are 140+ characters deep and Windows paths stop at 260.
+  $tempRoot = Join-Path ([System.IO.Path]::GetPathRoot($projectRoot)) ("xxl-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+  try {
+    New-Item -ItemType Directory -Force -Path $tempRoot -ErrorAction Stop | Out-Null
+  } catch {
+    $tempRoot = Join-Path $projectRoot ("xxl-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  }
   try {
     Write-Host "Extracting runtime package (this takes a few minutes)..."
     Expand-Archive -Path $ZipPath -DestinationPath $tempRoot -Force
@@ -573,6 +588,7 @@ function Merge-RuntimeZip($ZipPath) {
         if ($child.PSIsContainer) {
           # merge folder contents (e.g. Assets\Models) without overwriting user files
           & robocopy $child.FullName $dest /E /MOVE /XC /XN /XO /NFL /NDL /NJH /NJS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "Runtime file merge failed: robocopy exit $LASTEXITCODE" }
         }
       } else {
         Move-Item -LiteralPath $child.FullName -Destination $dest
@@ -644,10 +660,56 @@ function Ensure-VirtualAudio {
   }
 }
 
+function Test-Requirements {
+  Write-Step 0 "Check this computer"
+  Write-Host "Install folder: $projectRoot"
+  if ($projectRoot.Length -gt 80) {
+    throw "Install path is too long. Move the program to a short path such as E:\xxl and retry."
+  }
+  try {
+    $gpus = @(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
+    Write-Host ("Graphics: " + ($gpus -join ", "))
+    if (!($gpus | Where-Object { $_ -match "NVIDIA" })) {
+      Write-Host "提醒：没有找到 NVIDIA 显卡。羞羞脸变声需要 NVIDIA 显卡（推荐 RTX 20 系列或更新）才能实时变声，没有的话会非常卡。" -ForegroundColor Yellow
+    }
+  } catch { }
+  if (!(Test-RuntimeReady)) {
+    $drive = (Get-Item -LiteralPath $projectRoot).PSDrive
+    $freeGb = [math]::Round($drive.Free / 1GB, 1)
+    Write-Host "Free space on $($drive.Name): $freeGb GB"
+    if ($drive.Free -lt 16GB) {
+      throw "Not enough free space ($freeGb GB). At least 16 GB is required during installation."
+    }
+  }
+}
+
+function New-DesktopShortcut {
+  try {
+    $exe = Join-Path $projectRoot "羞羞脸变声.exe"
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $link = Join-Path $desktop "羞羞脸变声.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($link)
+    $shortcut.TargetPath = $exe
+    $shortcut.WorkingDirectory = $projectRoot
+    $shortcut.IconLocation = "$exe,0"
+    $shortcut.Description = "羞羞脸变声"
+    $shortcut.Save()
+    Write-Host "Desktop shortcut: $link"
+  } catch {
+    Write-Host "Could not create the desktop shortcut: $($_.Exception.Message)"
+  }
+}
+
 Write-Host "Setup version: $setupVersion"
+Test-Requirements
 Ensure-Runtime
 Ensure-VirtualAudio
 Write-Step 3 "Start"
+New-DesktopShortcut
 $exe = Join-Path $projectRoot "羞羞脸变声.exe"
-Write-Host "Setup completed. From now on just double-click: $exe"
+Write-Host ""
+Write-Host "安装完成！以后直接双击桌面上的「羞羞脸变声」就能用。" -ForegroundColor Green
+Write-Host "如果刚装了虚拟声卡、软件里找不到它，重启一次电脑。"
+Write-Host "Setup completed: $exe"
 if ($StartApp) { Start-Process -FilePath $exe -WorkingDirectory $projectRoot }

@@ -297,6 +297,17 @@ export function ModePanel({ cfg, setCfg, status }) {
   );
 }
 
+// The game must record from the other end of the cable the voice is sent to:
+// "CABLE Input (VB-Audio Virtual Cable)" -> "CABLE Output (VB-Audio Virtual Cable)",
+// "CABLE-A Input (VB-Audio Cable A)" -> "CABLE-A Output (VB-Audio Cable A)",
+// "伴侣扬声器 (VB-Audio Cable A)" -> "伴侣麦克风 (VB-Audio Cable A)".
+function pairedCableInput(outputName, inputs) {
+  const virtual = inputs.filter((d) => d.virtual);
+  const tag = /\(([^)]*)\)\s*$/.exec(outputName || "")?.[1];
+  const same = tag ? virtual.filter((d) => d.name.endsWith(`(${tag})`)) : [];
+  return same[0] || virtual.find((d) => d.name.includes("伴侣") || /cable(-[a-d])? output/i.test(d.name)) || null;
+}
+
 function deviceOptions(list) {
   return list.map((d) => ({ value: d.name, label: d.name + (d.virtual ? "  · 虚拟声卡" : "") }));
 }
@@ -314,7 +325,7 @@ export function DevicesTab({ cfg, setCfg, devices, onRefresh, system, toast, sta
   const input = inputs.find((d) => d.name === cfg.input_device);
   const output = outputs.find((d) => d.name === cfg.output_device);
   const hasCable = outputs.some((d) => d.virtual);
-  const cableMic = (devices.inputs || []).find((d) => d.virtual && (d.name.includes("伴侣") || /cable output/i.test(d.name)));
+  const cableMic = pairedCableInput(output?.name || cfg.output_device, devices.inputs || []);
 
   async function installDriver() {
     try {
@@ -359,7 +370,7 @@ export function DevicesTab({ cfg, setCfg, devices, onRefresh, system, toast, sta
             hint={
               output && !output.virtual
                 ? "这是真实扬声器/耳机，游戏里的队友听不到。一般选带「虚拟声卡」的那个。"
-                : probeHint(status, "output_device", cfg.output_device, "选虚拟声卡（如「伴侣扬声器 (VB-Audio Cable A)」）。").text
+                : probeHint(status, "output_device", cfg.output_device, "选虚拟声卡，名字里带 CABLE Input 或 VB-Audio 的那个。").text
             }
           />
         </div>
@@ -410,10 +421,10 @@ export function DevicesTab({ cfg, setCfg, devices, onRefresh, system, toast, sta
         </header>
         <ol>
           <li>
-            这里的「输出到游戏」选 <b>{output?.virtual ? output.name : "伴侣扬声器 (VB-Audio Cable A)"}</b>。
+            这里的「输出到游戏」选 <b>{output?.virtual ? output.name : "CABLE Input (VB-Audio …)"}</b>。
           </li>
           <li>
-            游戏 → 设置 → 声音/语音 → <b>麦克风（输入设备）</b>选 <b>{cableMic ? cableMic.name : "伴侣麦克风 (VB-Audio Cable A)"}</b>，不要选你的真实麦克风。
+            游戏 → 设置 → 声音/语音 → <b>麦克风（输入设备）</b>选 <b>{cableMic ? cableMic.name : "CABLE Output (VB-Audio …)"}</b>，不要选你的真实麦克风。
           </li>
           <li>想听自己的效果就打开上面的「监听」。说话时「变声后」的音量条在跳，就说明队友能听到。</li>
           <li>显卡吃满时，在游戏里把帧率限制到比平时低 10~20%，变声会更稳。</li>
