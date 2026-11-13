@@ -1,6 +1,7 @@
 # large runtime pieces (downloaded by scripts/setup.ps1)
 /runtime/
 /dependencies/
+/drivers/
 /Assets/
 /配置文件/
 /VB虚拟.zip

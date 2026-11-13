@@ -4,9 +4,9 @@
 
 ## 电脑要求
 
-- Windows 10 或 11（64 位）
+- Windows 10 或 11（Intel / AMD x64；不支持 Windows ARM）
 - **NVIDIA 显卡**，需要与所带 PyTorch/CUDA 运行环境兼容的型号和驱动。不同显卡型号仍需实机确认，尤其不能仅凭代数推定兼容。
-- 安装时要有约 **16 GB** 空闲空间（装完后占用约 9 GB），网络要能下载约 5.6 GB。
+- 安装时要有约 **16 GB** 空闲空间（装完后占用约 8 GB），网络要能下载约 5.5 GB。
 - 一个麦克风。
 
 ## 新电脑安装（只需做一次）
@@ -16,8 +16,8 @@
 2. **解压到一个短路径**，比如 `D:\羞羞脸变声`。
    不要直接在压缩包里运行，也不要放在很深的文件夹里（路径太长会装不上）。
 3. **双击 `首次安装.bat`**，它会自动：
-   - 下载运行环境和声音模型（约 5.6 GB，断了重新双击会接着下，国内会自动走加速镜像）；
-   - 安装虚拟声卡 VB-Cable（Windows 会弹窗要管理员权限，点「是」，然后在安装窗口点 Install Driver）；
+   - 下载运行环境和声音模型（约 5.5 GB，断了重新双击会接着下，国内会自动走加速镜像）；
+   - 安装普通版 VB-CABLE（Windows 会弹窗要管理员权限，确认发布者后点「是」，在安装窗口点 Install Driver）。已有可用虚拟声卡时会保留原来的驱动；
    - 在桌面创建「羞羞脸变声」快捷方式，并打开软件。
 4. 如果装完虚拟声卡后软件里找不到它，**重启一次电脑**。
 
@@ -57,7 +57,7 @@
 ├─ runtime\              Python 3.9 + PyTorch（安装时下载，不进 git）
 ├─ dependencies\basemodels\  hubert_base.pt、rmvpe.pt（安装时下载）
 ├─ Assets\Models\        声音模型，每个模型一个文件夹（.pth，可选 .index 和 cover.jpg）
-├─ 配置文件\vbcable\      VB-Cable 虚拟声卡安装程序（安装时下载）
+├─ drivers\              普通版 VB-CABLE 官方原包及安装程序（安装时下载）
 ├─ data\                 你的设置、日志、录音（删了就恢复默认，不进 git）
 └─ scripts\              安装脚本
 ```
@@ -67,7 +67,7 @@
 - 变声算法是 RVC（v1/v2 模型都支持，带 .index 的模型可以开「索引强度」）。
 - 内容特征用 torchaudio 版 HuBERT，音高用 RMVPE / FCPE。推理流程改编自 [RVC-Project](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)（MIT），相关文件在 `app\xxl\vendor\rvc`，许可证见同目录 `LICENSE.txt`。
 - 声卡优先走 WASAPI；个别驱动下 PortAudio 打不开时，改用内置的 [SoundCard](https://github.com/bastibe/SoundCard)（BSD-3，`app\soundcard`）直接连 WASAPI，最后才退回兼容模式。
-- 本地接口只监听 `127.0.0.1:18674`，除了首次安装下载运行环境，不联网。
+- 本地接口只监听 `127.0.0.1:18674`，除安装时下载运行环境和缺失的普通版驱动外，变声处理在本机进行。
 
 ## 开发
 
@@ -82,4 +82,12 @@ npm run dev            # 开发时用，接口会代理到正在运行的软件
 sh launcher/build.sh
 ```
 
-运行环境安装包在 Release `backend-v2`（`VoiceChanger.zip.001`～`.022`，安装脚本会校验大小和 SHA256）。只发布你有权分发的运行环境、模型和驱动。
+运行环境安装包在 Release `backend-v3`（`VoiceChanger.zip.001`～`.022`，安装脚本会校验大小和 SHA256）。只发布你有权分发的运行环境、模型和驱动。
+
+## 虚拟声卡来源和许可
+
+普通版 **VB-CABLE** 由 [VB-Audio Software](https://vb-audio.com/Cable/) 提供，属于 **Donationware（捐赠软件）**。如果它对你有帮助，请通过 [官方商店](https://shop.vb-audio.com/) 捐赠或购买许可，支持开发者。
+
+运行环境附带未经修改的官方 `VBCABLE_Driver_Pack46.zip`，安装时会检查 SHA-256：`bc44e8974191a5a2427d6c979e2dab08dbb09925f3f435dfa2f0ba3e45b6eb90`。它独立于本项目，不受本项目开源代码的许可证覆盖。商业、企业、机构等场景请按照 [官方分发和许可条款](https://vb-audio.com/Services/licensing.htm) 获取所需许可。
+
+新版运行环境不包含 VB-CABLE A/B/C/D。已自行取得许可并安装这些设备的用户可以继续使用，无需卸载或更换。

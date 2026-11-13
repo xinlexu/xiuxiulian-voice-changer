@@ -15,12 +15,12 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$setupVersion = "2026-11-xiuxiulian-2.0"
-$defaultBackendReleaseTag = $(if ($env:XIUXIULIAN_BACKEND_RELEASE_TAG) { $env:XIUXIULIAN_BACKEND_RELEASE_TAG } else { "backend-v2" })
+$setupVersion = "2026-11-13-backend-v3"
+$defaultBackendReleaseTag = $(if ($env:XIUXIULIAN_BACKEND_RELEASE_TAG) { $env:XIUXIULIAN_BACKEND_RELEASE_TAG } else { "backend-v3" })
 $defaultBackendPartCount = $(if ($env:XIUXIULIAN_BACKEND_PART_COUNT) { [int]$env:XIUXIULIAN_BACKEND_PART_COUNT } else { 22 })
 $parallelBackendDownloads = $(if ($env:XIUXIULIAN_PARALLEL_DOWNLOADS) { [int]$env:XIUXIULIAN_PARALLEL_DOWNLOADS } else { 4 })
-$defaultBackendZipBytes = 5639712431
-$defaultBackendZipSha256 = "C9B852A53FE3A55D3173C248F839C81BCF37645C399D23B81DC5872849D596ED"
+$defaultBackendZipBytes = 5509343662
+$defaultBackendZipSha256 = "4D2E7E3472EDFBCFE4E603C7C235009852730765599F0D6C8CB9DB07235757E3"
 $script:curlSupportsRetryAllErrors = $null
 $script:aria2Command = $null
 
@@ -250,18 +250,18 @@ function Invoke-CurlDownload($Url, $OutputPath, $TempPath) {
     $resumeBytes = (Get-Item -LiteralPath $TempPath).Length
   }
 
-  $lastExitCode = 1
+  $downloadExitCode = 1
   foreach ($candidateUrl in Get-DownloadUrls $Url) {
     Write-Host "Download source: $(Get-DownloadSourceLabel $candidateUrl)"
     $curlArgs = New-CurlArgumentList $candidateUrl $TempPath $resumeBytes
     & curl.exe @curlArgs
-    $lastExitCode = $LASTEXITCODE
-    if ($lastExitCode -eq 0) {
+    $downloadExitCode = $LASTEXITCODE
+    if ($downloadExitCode -eq 0) {
       return 0
     }
   }
 
-  return $lastExitCode
+  return $downloadExitCode
 }
 
 function Invoke-SetupDownload($Url, $OutputPath) {
@@ -550,7 +550,7 @@ function Download-BackendParts {
 
   $zipPath = Merge-BackendParts $partPaths (Join-Path $downloadDir "VoiceChanger.zip")
   Assert-BackendZipIntegrity $zipPath
-  # the parts are no longer needed once the merged package checks out (saves 5.6 GB of disk)
+  # the parts are no longer needed once the merged package checks out (saves 5.5 GB of disk)
   foreach ($part in $partPaths) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
   return $zipPath
 }
@@ -634,32 +634,46 @@ function Ensure-Runtime {
   if (!(Test-RuntimeReady)) { throw "Runtime is still incomplete after extraction." }
 }
 
+function Get-StandardCableInstaller {
+  # Only the original standard VB-CABLE archive is eligible for new installations.
+  # Never pick an installer from the legacy configuration folder (it may be Cable A/B).
+  $archive = Join-Path $projectRoot "drivers\VBCABLE_Driver_Pack46.zip"
+  $expectedHash = "BC44E8974191A5A2427D6C979E2DAB08DBB09925F3F435DFA2F0BA3E45B6EB90"
+  if (!(Test-Path -LiteralPath $archive)) {
+    Invoke-SetupDownload "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip" $archive
+  }
+  if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) {
+    throw "VB-CABLE archive checksum failed. Remove drivers\VBCABLE_Driver_Pack46.zip and rerun setup."
+  }
+  $destination = Join-Path $projectRoot "drivers\vbcable-standard"
+  Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+  $installer = Join-Path $destination "VBCABLE_Setup_x64.exe"
+  if (!(Test-Path -LiteralPath $installer)) { throw "Standard VB-CABLE installer is missing." }
+  return $installer
+}
+
+function Get-VirtualAudioDevices {
+  $pattern = "VB-Audio|VB-Cable|CABLE Input|CABLE Output|Cable A|Cable B|伴侣扬声器|伴侣麦克风|VoiceMeeter"
+  return @(Get-CimInstance Win32_PnPEntity | Where-Object {
+    $_.Status -eq "OK" -and ($_.PNPClass -eq "AudioEndpoint" -or $_.PNPClass -eq "MEDIA") -and $_.Name -match $pattern
+  })
+}
+
 function Ensure-VirtualAudio {
   Write-Step 2 "Virtual audio driver"
-  $pattern = "VB-Audio|VB-Cable|CABLE Input|CABLE Output|Cable A|Cable B|伴侣扬声器|伴侣麦克风|VoiceMeeter"
-  $found = Get-CimInstance Win32_PnPEntity | Where-Object { ($_.PNPClass -eq "AudioEndpoint" -or $_.PNPClass -eq "MEDIA") -and $_.Name -match $pattern }
-  if ($found) {
-    Write-Host "Virtual audio driver is installed."
+  if (@(Get-VirtualAudioDevices).Count -gt 0) {
+    Write-Host "Virtual audio driver is installed; keeping the existing driver."
     return
   }
-  $installer = Get-ChildItem -Path (Join-Path $projectRoot "配置文件") -Recurse -Filter "VBCABLE_Setup_x64.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (!$installer) {
-    $zip = Join-Path $projectRoot "VB虚拟.zip"
-    if (Test-Path -LiteralPath $zip) {
-      $dest = Join-Path $projectRoot "配置文件\vbcable"
-      New-Item -ItemType Directory -Force -Path $dest | Out-Null
-      Expand-Archive -Path $zip -DestinationPath $dest -Force
-      $installer = Get-ChildItem -Path $dest -Recurse -Filter "VBCABLE_Setup_x64.exe" | Select-Object -First 1
-    }
+  Write-Host "VB-CABLE by VB-Audio Software: https://vb-audio.com/Cable/"
+  Write-Host "VB-CABLE is donationware. Please support it if useful: https://shop.vb-audio.com/"
+  $installer = Get-StandardCableInstaller
+  Write-Host "Starting standard VB-CABLE setup. Approve the Windows administrator prompt, then click Install Driver."
+  Start-Process -FilePath $installer -Verb RunAs -Wait
+  if (@(Get-VirtualAudioDevices).Count -eq 0) {
+    throw "VB-CABLE is not detected yet. Restart Windows and rerun first-time setup. If installation was cancelled, install the driver first."
   }
-  if ($installer) {
-    Write-Host "Starting the VB-Cable installer (Windows will ask for administrator permission)..."
-    Start-Process -FilePath $installer.FullName -Verb RunAs -Wait
-    Write-Host "If the device does not show up, restart Windows once."
-  } else {
-    Write-Host "VB-Cable installer not found. Get it from https://vb-audio.com/Cable/"
-    Start-Process "https://vb-audio.com/Cable/"
-  }
+  Write-Host "VB-CABLE detected. Restart Windows before first use if the device is unavailable."
 }
 
 function Test-Requirements {
